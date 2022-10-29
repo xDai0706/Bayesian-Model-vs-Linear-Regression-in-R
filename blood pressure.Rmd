@@ -1,0 +1,129 @@
+---
+title: "blood pressure(part 3)"
+author: "Xinqian Dai"
+date: '2022-07-22'
+output: html_document
+---
+
+#Blood Pressure Data
+#Classical Linear Regression
+```{r}
+library(dplyr)
+library(tidyverse)
+setwd("/Users/demix9/Desktop") 
+data <-read.csv(file="blood_pressure.csv")
+
+lm(blood_pressure ~ age, data = data) %>% summary()
+
+plot(data$age,data$blood_pressure,xlab="Age",ylab="Blood Pressure")
+fit <- lm(blood_pressure~age,data=data) 
+abline(fit,col="red",lwd=3)
+fit$sigma
+
+confint(fit, level=0.95)
+
+data %>%
+ggplot(aes(age, blood_pressure)) +
+geom_point(colour = 'skyblue', size = 2, alpha = 0.75) + geom_smooth(method = 'lm', colour = 'grey', linetype = 'dotted') + theme_bw() +
+labs(x = 'Age', y = 'Blood Pressure')
+#As can be seen from the plots, there is a positive linear relationship between age and blood pressure. 
+```
+
+```{r}
+# Estimating betas
+sigma <- 1/rgamma(n = 1, shape = 0.5, rate = 1)
+x <- rnorm(n = 1000, mean = 3, sd = 1.5)
+e <- rnorm(n = 1000, mean = 0, sd = sqrt(sigma))
+V <- matrix(sigma*c(10, 0, 0, 10), ncol = 2, nrow = 2)
+
+betas <- MASS::mvrnorm(n = 1, mu = c(0, 0), Sigma = V)
+
+mm <- model.matrix(blood_pressure ~ age, data = data)
+
+k <- ncol(mm)
+n <- nrow(mm)
+v <- solve(t(mm) %*% mm)
+betas_hat <- v %*% t(mm) %*% data$blood_pressure
+betas_hat
+```
+
+
+```{r}
+y_hat <- mm %*% betas_hat 
+data$res <- data$blood_pressure - y_hat
+data %>%
+ggplot(aes(res)) +
+geom_density(colour = 'skyblue', size = 1.2, alpha = 0.75) + geom_vline(xintercept = 0, linetype = 'dotted') +
+theme_bw() +
+labs(x = 'Residuals')
+```
+```{r}
+# Residual sum of squares
+rss <- sum((data$blood_pressure - y_hat)^2)
+rss
+```
+```{r}
+# Mean squared errors
+mse <- mean((data$blood_pressure - y_hat)^2)
+mse
+```
+```{r}
+# Rs - Multiple correlation coefficients
+(R <- sum((y_hat - mean(y))^2)/sum((data$blood_pressure - mean(data$blood_pressure))^2))
+(R_adj <- 1 - (1 - R)*((n-1)/(n-k)))
+```
+```{r}
+# Estimating the variance of the parameters
+var_betas <- solve(t(mm) %*% mm) * mse 
+var_betas
+```
+```{r}
+# t-values
+t1 <- betas_hat[2]/sqrt(var_betas[2, 2]) 
+t2 <- betas_hat[1]/sqrt(var_betas[1, 1])
+t1
+t2
+```
+
+#Bayesian model
+```{r}
+v_star <- solve(solve(V) + t(mm) %*% mm)
+m_star <- v_star %*% (solve(V) %*% c(0, 0) + t(mm) %*% data$blood_pressure) 
+a_star <- 0.5 + n/2
+b_star <- 1 + (t(c(0, 0)) %*% solve(V) %*% c(0, 0) +
+(t(data$blood_pressure) %*% data$blood_pressure) - t(m_star) %*% solve(v_star) %*% m_star)/2
+
+# Sampling from the posteriors -----------------------------------------------------
+sim <- 100000
+gamma <- rgamma(sim, shape = a_star, rate = b_star)
+
+# For the variance
+sigma_sim <- 1/gamma
+
+# For the random error
+err <- sqrt(sigma_sim)*MASS::mvrnorm(n = sim, mu = c(0, 0), v_star)
+```
+
+```{r}
+library(rstanarm)
+params <- data.frame(par = c(rep(c(m_star), each = sim) + c(err[,1], err[,2]), sigma_sim))
+params$groups <- as.factor(rep(c(1:3), each = sim)) 
+params$groups_label <- factor(params$groups, labels =
+c('beta[0]', 'beta[1]', 'sigma^2'))
+params_prior <- c(betas, sigma)
+vline <- function(group){
+geom_vline(data = dplyr::filter(params,
+groups == group),
+aes(xintercept = params_prior[group]), linetype = 'dotted')
+}
+
+params %>%
+ggplot(aes(par)) +
+geom_density(colour = 'skyblue', size = 1.2, alpha = 0.75) +
+1:3 %>% purrr::map(vline) + facet_wrap(~groups_label, scales = 'free',
+labeller = label_parsed) + theme_bw() +
+labs(x = 'Parameters', y = 'Density',  title = 'Posterior densities of the parameters')
+
+pressurelinear <- stan_glm(blood_pressure ~ age, data = data)
+posterior_interval(pressurelinear,prob = 0.95)
+```
